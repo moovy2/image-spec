@@ -16,16 +16,17 @@ package schema_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/url"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/opencontainers/image-spec/schema"
-	"github.com/pkg/errors"
 	"github.com/russross/blackfriday"
 )
 
@@ -53,6 +54,31 @@ func TestValidateConfig(t *testing.T) {
 	validate(t, "../config.md")
 }
 
+func TestSchemaFS(t *testing.T) {
+	expectedSchemaFileNames, err := filepath.Glob("*.json")
+	if err != nil {
+		t.Error(err)
+	}
+
+	dir, err := schema.FileSystem().Open("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := dir.Readdir(-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schemaFileNames []string
+	for _, f := range files {
+		schemaFileNames = append(schemaFileNames, f.Name())
+	}
+
+	if !reflect.DeepEqual(schemaFileNames, expectedSchemaFileNames) {
+		t.Fatalf("got %v, expected %v", schemaFileNames, expectedSchemaFileNames)
+	}
+}
+
 // TODO(sur): include examples from all specification files
 func validate(t *testing.T, name string) {
 	m, err := os.Open(name)
@@ -67,7 +93,7 @@ func validate(t *testing.T, name string) {
 	}
 
 	for _, example := range examples {
-		if example.Err == errFormatInvalid && example.Mediatype == "" { // ignore
+		if errors.Is(example.Err, errFormatInvalid) && example.Mediatype == "" { // ignore
 			continue
 		}
 
@@ -80,26 +106,11 @@ func validate(t *testing.T, name string) {
 		err = schema.Validator(example.Mediatype).Validate(strings.NewReader(example.Body))
 		if err == nil {
 			printFields(t, "ok", example.Mediatype, example.Title)
-			t.Log(example.Body, "---")
-			continue
-		}
-
-		var errs []error
-		if verr, ok := errors.Cause(err).(schema.ValidationError); ok {
-			errs = verr.Errs
 		} else {
 			printFields(t, "error", example.Mediatype, example.Title, err)
 			t.Error(err)
-			t.Log(example.Body, "---")
-			continue
 		}
-
-		for _, err := range errs {
-			printFields(t, "invalid", example.Mediatype, example.Title)
-			t.Error(err)
-			fmt.Println(example.Body, "---")
-			continue
-		}
+		t.Log(example.Body, "---")
 	}
 }
 
@@ -156,7 +167,7 @@ func parseExample(lang, body string) (e example) {
 }
 
 func extractExamples(rd io.Reader) ([]example, error) {
-	p, err := ioutil.ReadAll(rd)
+	p, err := io.ReadAll(rd)
 	if err != nil {
 		return nil, err
 	}
