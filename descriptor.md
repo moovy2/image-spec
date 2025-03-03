@@ -1,11 +1,13 @@
 # OCI Content Descriptors
 
-* An OCI image consists of several different components, arranged in a [Merkle Directed Acyclic Graph (DAG)](https://en.wikipedia.org/wiki/Merkle_tree).
-* References between components in the graph are expressed through _Content Descriptors_.
-* A Content Descriptor (or simply _Descriptor_) describes the disposition of the targeted content.
-* A Content Descriptor includes the type of the content, a content identifier (_digest_), and the byte-size of the raw content.
-* Descriptors SHOULD be embedded in other formats to securely reference external content.
-* Other formats SHOULD use descriptors to securely reference external content.
+- An OCI image consists of several different components, arranged in a [Merkle Directed Acyclic Graph (DAG)](https://en.wikipedia.org/wiki/Merkle_tree).
+- References between components in the graph are expressed through _Content Descriptors_.
+- A Content Descriptor (or simply _Descriptor_) describes the disposition of the targeted content.
+- A Content Descriptor includes the type of the content, a content identifier (_digest_), and the byte-size of the raw content.
+  Optionally, it includes the type of artifact it is describing.
+- Descriptors SHOULD be embedded in other formats to securely reference external content.
+- Other formats SHOULD use descriptors to securely reference external content.
+- When other formats contain multiple descriptors, unless otherwise specified, those descriptors are independent of each other, allowing fields like the `mediaType` and the algorithm for the `digest` to vary within that external content.
 
 This section defines the `application/vnd.oci.descriptor.v1+json` [media type](media-types.md).
 
@@ -41,25 +43,31 @@ The following fields contain the primary properties that constitute a Descriptor
 
 - **`annotations`** *string-string map*
 
-    This OPTIONAL property contains arbitrary metadata for this descriptor.
-    This OPTIONAL property MUST use the [annotation rules](annotations.md#rules).
+  This OPTIONAL property contains arbitrary metadata for this descriptor.
+  This OPTIONAL property MUST use the [annotation rules](annotations.md#rules).
+
+- **`data`** *string*
+
+  This OPTIONAL property contains an embedded representation of the referenced content.
+  Values MUST conform to the Base 64 encoding, as defined in [RFC 4648][rfc4648-s4].
+  The decoded data MUST be identical to the referenced content and SHOULD be verified against the [`digest`](#digests) and `size` fields by content consumers.
+  See [Embedded Content](#embedded-content) for when this is appropriate.
+
+- **`artifactType`** *string*
+
+  This OPTIONAL property contains the type of an artifact when the descriptor points to an artifact.
+  This is the value of the config descriptor `mediaType` when the descriptor references an [image manifest](manifest.md).
+  If defined, the value MUST comply with [RFC 6838][rfc6838], including the [naming requirements in its section 4.2][rfc6838-s4.2], and MAY be registered with [IANA][iana].
 
 Descriptors pointing to [`application/vnd.oci.image.manifest.v1+json`](manifest.md) SHOULD include the extended field `platform`, see [Image Index Property Descriptions](image-index.md#image-index-property-descriptions) for details.
 
 ### Reserved
 
-The following field keys are reserved and MUST NOT be used by other specifications.
-
-- **`data`** *string*
-
-  This key is RESERVED for future versions of the specification.
-
-All other fields may be included in other OCI specifications.
 Extended _Descriptor_ field additions proposed in other OCI specifications SHOULD first be considered for addition into this specification.
 
 ## Digests
 
-The _digest_ property of a Descriptor acts as a content identifier, enabling [content addressability](http://en.wikipedia.org/wiki/Content-addressable_storage).
+The _digest_ property of a Descriptor acts as a content identifier, enabling [content addressability](https://en.wikipedia.org/wiki/Content-addressable_storage).
 It uniquely identifies content by taking a [collision-resistant hash](https://en.wikipedia.org/wiki/Cryptographic_hash_function) of the bytes.
 If the _digest_ can be communicated in a secure manner, one can verify content from an insecure source by recalculating the digest independently, ensuring the content has not been modified.
 
@@ -68,7 +76,7 @@ The _algorithm_ specifies the cryptographic hash function and encoding used for 
 
 A digest string MUST match the following [grammar](considerations.md#ebnf):
 
-```
+```ebnf
 digest                ::= algorithm ":" encoded
 algorithm             ::= algorithm-component (algorithm-separator algorithm-component)*
 algorithm-component   ::= [a-z0-9]+
@@ -81,12 +89,12 @@ See also [Registered Algorithms](#registered-algorithms).
 
 Some example digest strings include the following:
 
-digest                                                                    | algorithm           | Registered |
---------------------------------------------------------------------------|---------------------|------------|
-`sha256:6c3c624b58dbbcd3c0dd82b4c53f04194d1247c6eebdaab7c610cf7d66709b3b` | [SHA-256](#sha-256) | Yes        |
-`sha512:401b09eab3c013d4ca54922bb802bec8fd5318192b0a75f201d8b372742...`   | [SHA-512](#sha-512) | Yes        |
-`multihash+base58:QmRZxt2b1FVZPNqd8hsiykDL3TdBDeTSPX9Kv46HmX4Gx8`         | Multihash           | No         |
-`sha256+b64u:LCa0a2j_xo_5m0U8HTBBNBNCLXBkg7-g-YpeiGJm564`                 | SHA-256 with urlsafe base64 | No |
+| digest                                                                    | algorithm                   | Registered |
+|---------------------------------------------------------------------------|-----------------------------|------------|
+| `sha256:6c3c624b58dbbcd3c0dd82b4c53f04194d1247c6eebdaab7c610cf7d66709b3b` | [SHA-256](#sha-256)         | Yes        |
+| `sha512:401b09eab3c013d4ca54922bb802bec8fd5318192b0a75f201d8b372742...`   | [SHA-512](#sha-512)         | Yes        |
+| `multihash+base58:QmRZxt2b1FVZPNqd8hsiykDL3TdBDeTSPX9Kv46HmX4Gx8`         | Multihash                   | No         |
+| `sha256+b64u:LCa0a2j_xo_5m0U8HTBBNBNCLXBkg7-g-YpeiGJm564`                 | SHA-256 with urlsafe base64 | No         |
 
 Please see [Registered Algorithms](#registered-algorithms) for a list of registered algorithms.
 
@@ -104,19 +112,21 @@ Implementations MAY employ [canonicalization](considerations.md#canonicalization
 ### Digest calculations
 
 A _digest_ is calculated by the following pseudo-code, where `H` is the selected hash algorithm, identified by string `<alg>`:
-```
+
+```text
 let ID(C) = Descriptor.digest
 let C = <bytes>
 let D = '<alg>:' + Encode(H(C))
 let verified = ID(C) == D
 ```
+
 Above, we define the content identifier as `ID(C)`, extracted from the `Descriptor.digest` field.
 Content `C` is a string of bytes.
 Function `H` returns the hash of `C` in bytes and is passed to function `Encode` and prefixed with the algorithm to obtain the digest.
 The result `verified` is true if `ID(C)` is equal to `D`, confirming that `C` is the content identified by `D`.
 After verification, the following is true:
 
-```
+```text
 D == ID(C) == '<alg>:' + Encode(H(C))
 ```
 
@@ -151,6 +161,20 @@ Implementations MAY implement SHA-512 digest verification for use in descriptors
 When the _algorithm identifier_ is `sha512`, the _encoded_ portion MUST match `/[a-f0-9]{128}/`.
 Note that `[A-F]` MUST NOT be used here.
 
+## Embedded Content
+
+In many contexts, such as when downloading content over a network, resolving a descriptor to its content has a measurable fixed "roundtrip" latency cost.
+For large blobs, the fixed cost is usually inconsequential, as the majority of time will be spent actually fetching the content.
+For very small blobs, the fixed cost can be quite significant.
+
+Implementations MAY choose to embed small pieces of content directly within a descriptor to avoid roundtrips.
+
+Implementations MUST NOT populate the `data` field in situations where doing so would modify existing content identifiers.
+For example, a registry MUST NOT arbitrarily populate `data` fields within uploaded manifests, as that would modify the content identifier of those manifests.
+In contrast, a client MAY populate the `data` field before uploading a manifest, because the manifest would not yet have a content identifier in the registry.
+
+Implementations SHOULD consider portability when deciding whether to embed data, as some providers are known to refuse to accept or parse manifests that exceed a certain size.
+
 ## Examples
 
 The following example describes a [_Manifest_](manifest.md#image-manifest) with a content identifier of "sha256:5b0bcabd1ed22e9fb1310cf6c2dec7cdef19f0ad69efa1f392e94a4333501270" and a size of 7682 bytes:
@@ -176,10 +200,23 @@ In the following example, the descriptor indicates that the referenced manifest 
 }
 ```
 
+In the following example, the descriptor indicates the type of artifact it is referencing:
+
+```json,title=Content%20Descriptor&mediatype=application/vnd.oci.descriptor.v1%2Bjson
+{
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "size": 123,
+  "digest": "sha256:87923725d74f4bfb94c9e86d64170f7521aad8221a5de834851470ca142da630",
+  "artifactType": "application/vnd.example.sbom.v1"
+}
+```
+
 [rfc3986]: https://tools.ietf.org/html/rfc3986
 [rfc4634-s4.1]: https://tools.ietf.org/html/rfc4634#section-4.1
 [rfc4634-s4.2]: https://tools.ietf.org/html/rfc4634#section-4.2
+[rfc4648-s4]: https://tools.ietf.org/html/rfc4648#section-4
 [rfc6838]: https://tools.ietf.org/html/rfc6838
 [rfc6838-s4.2]: https://tools.ietf.org/html/rfc6838#section-4.2
 [rfc7230-s2.7]: https://tools.ietf.org/html/rfc7230#section-2.7
 [sha256-vs-sha512]: https://groups.google.com/a/opencontainers.org/forum/#!topic/dev/hsMw7cAwrZE
+[iana]: https://www.iana.org/assignments/media-types/media-types.xhtml
